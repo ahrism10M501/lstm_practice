@@ -20,42 +20,51 @@ class LSTM_cell(nn.Module):
         self.x2hc = nn.Linear(input_size, hidden_size, bias=bias)
         self.h2hc =  nn.Linear(hidden_size, hidden_size, bias=bias)
         
-    def forward(self, x, hidden):
-        cx, hx = hidden
+    def forward(self, x, c, h):
         x = x.view(-1, x.size(1))
-        ft = torch.sigmoid(self.x2hf(x)+self.h2hf(hx))
-        it = torch.sigmoid(self.x2hi(x)+self.h2hi(hx))
-        ot = torch.sigmoid(self.x2ho(x)+self.h2ho(hx))
-        ct_tilt = torch.tanh(self.x2hc(x)+self.h2hc(hx))
+        ft = torch.sigmoid(self.x2hf(x)+self.h2hf(h))
+        it = torch.sigmoid(self.x2hi(x)+self.h2hi(h))
+        ot = torch.sigmoid(self.x2ho(x)+self.h2ho(h))
+        ct_tilt = torch.tanh(self.x2hc(x)+self.h2hc(h))
 
-        ct = ft*cx + ct_tilt*it
-        ht = torch.tanh(ct)*ot
+        ct = torch.mul(ft, c) + torch.mul(ct_tilt, it)
+        ht = torch.mul(torch.tanh(ct), ot)
 
         return ct, ht
     
 class LSTM(nn.Module):
-    def __init__(self, input, hidden, layer, output,bias=True):
+    def __init__(self, seq_len, batch, input, hidden, layer, output,bias=True):
         super(LSTM, self).__init__()
+        self.seq_len = seq_len
+        self.batch = batch
         self.input = input
         self.hidden = hidden
         self.layer = layer
         self.output = output
         self.bias = bias
-        self.c0 = []
-        self.h0 = []
-        self.cell_layer = []
+
+        self.cell_layer = nn.ModuleList()
         self.cell_layer.append(LSTM_cell(input, hidden, bias))
         for _ in range(1, self.layer):
             self.cell_layer.append(LSTM_cell(self.hidden, self.hidden, self.bias))
+        self.fc = nn.Linear(hidden, output)
 
     def _init_hidden(self):
-        c = torch.zeros(-1, self.hidden)
-        h = torch.zeros(-1, self.hidden)
+        c = torch.zeros(self.batch, self.hidden)
+        h = torch.zeros(self.batch, self.hidden)
         return c, h
 
-    def forward(self, x, ):
+    def forward(self, x, c, h):
+        cx, hx = c, h
+        # TODO: seq에 따라 시계열 데이터 처리하기
+        # 지금은 one-to-one -> 생성은 또 어케하는걸까
         for layer in self.cell_layer:
-            c, h = layer(x, (c, h))
-        x = h
-        p = torch.softmax(h, dim=1)
-        return p
+            cx, hx = layer(x, cx, hx)
+
+        x = self.fc(hx)
+        x = torch.softmax(x, dim=1)
+
+        self.cx = cx
+        self.hx = hx
+
+        return x, cx, hx
