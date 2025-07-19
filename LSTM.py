@@ -48,6 +48,7 @@ class LSTM(nn.Module):
         # 원하는 수만큼 위로 레이어 쌓기
         self.cell_layer = nn.ModuleList()
         self.cell_layer.append(LSTM_cell(input_size, hidden_size, bias))
+        
         for _ in range(1, self.layer):
             self.cell_layer.append(LSTM_cell(self.hidden, self.hidden, self.bias))
         self.fc = nn.Linear(hidden_size, output)
