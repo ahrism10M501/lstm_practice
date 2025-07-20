@@ -2,23 +2,23 @@ import torch
 import torch.nn as nn
 
 class LSTM_cell(nn.Module):
-    def __init__(self, input_size_size, hidden_size, bias=True):
+    def __init__(self, input_size, hidden_size, bias=True):
 
         super(LSTM_cell, self).__init__()
-        _size = input_size_size
+        self.input_size = input_size
         self.hidden_size = hidden_size
         self.bias = bias
 
-        self.x2hf = nn.Linear(input_size_size, hidden_size, bias=bias)
+        self.x2hf = nn.Linear(input_size, hidden_size, bias=bias)
         self.h2hf =  nn.Linear(hidden_size, hidden_size, bias=bias)
 
-        self.x2hi = nn.Linear(input_size_size, hidden_size, bias=bias)
+        self.x2hi = nn.Linear(input_size, hidden_size, bias=bias)
         self.h2hi =  nn.Linear(hidden_size, hidden_size, bias=bias)
 
-        self.x2ho = nn.Linear(input_size_size, hidden_size, bias=bias)
+        self.x2ho = nn.Linear(input_size, hidden_size, bias=bias)
         self.h2ho =  nn.Linear(hidden_size, hidden_size, bias=bias)
 
-        self.x2hc = nn.Linear(input_size_size, hidden_size, bias=bias)
+        self.x2hc = nn.Linear(input_size, hidden_size, bias=bias)
         self.h2hc =  nn.Linear(hidden_size, hidden_size, bias=bias)
         
     def forward(self, x, c, h):
@@ -33,21 +33,24 @@ class LSTM_cell(nn.Module):
         return ct, ht
 
 class LSTM(nn.Module):
-    def __init__(self, input_size: int,
+    def __init__(self, vocab_size: int,
+                 embedding_dim: int,
                  hidden_size: int,
                  layer: int,
                  output: int,
                  bias: bool=True):
         
         super(LSTM, self).__init__()
-        self.input_size = input_size
+        self.encoder = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
+        
+        self.input_size = embedding_dim
         self.hidden = hidden_size
         self.layer = layer
         self.bias = bias
 
         # 원하는 수만큼 위로 레이어 쌓기
         self.cell_layer = nn.ModuleList()
-        self.cell_layer.append(LSTM_cell(input_size, hidden_size, bias))
+        self.cell_layer.append(LSTM_cell(embedding_dim, hidden_size, bias))
         
         for _ in range(1, self.layer):
             self.cell_layer.append(LSTM_cell(self.hidden, self.hidden, self.bias))
@@ -56,7 +59,7 @@ class LSTM(nn.Module):
     def forward(self, x):
         # x: [batch, seq_len, input_size_dim] = (4, 10, 64)
         # 4배치, 단어 10개짜리 문장, 64개 단어에 대해
-
+        x = self.encoder(x)
         # 초기 값
         c0 = torch.zeros(self.layer, x.size(0), self.hidden, device=x.device)
         h0 = torch.zeros(self.layer, x.size(0), self.hidden, device=x.device)

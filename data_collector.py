@@ -1,15 +1,17 @@
-import os
 import glob
 import json
 import re
 from tqdm import tqdm
 import pickle
 from typing import Optional
+from collections import Counter
 
-import soynlp
 from soynlp.utils import DoublespaceLineCorpus
 from soynlp.word import WordExtractor
 from soynlp.tokenizer import MaxScoreTokenizer
+
+import torch
+from torch.utils.data import Dataset
 
 # 데이터를 받아서 일정하게 처리한 후 내보냄.
 
@@ -21,6 +23,7 @@ class DataCollector():
     openUp() : [json_path]를 주면 안의 내용 return
     """
     tokenizer: Optional[MaxScoreTokenizer] = None
+    vocab:Optional[dict] = None
 
     def __init__(self, path, key:str, mode='train'):
         self.root_path = path
@@ -60,7 +63,7 @@ class DataCollector():
     def tokenizerTrain(self, path=None, save_path=None):
         """
         path : 이미 word score table이 있을 경우 파일 주세요
-        save_path : \'저장 위치(경로)/이름.json\' . 이 란이 비어있으면 저장하지 않음.
+        save_path : \'저장 위치(경로)/이름.pkl\' . 이 란이 비어있으면 저장하지 않음.
         """
         data = self.train_data + self.valid_data
         sentences = [data['sentence'] for data in data]
@@ -77,6 +80,7 @@ class DataCollector():
 
             sent = DoublespaceLineCorpus('corpus.txt', iter_sent=True)
             Word_Extractor = WordExtractor()
+            print("Tokenizer", end=" ")
             Word_Extractor.train(sent)
             word_score_table:dict = Word_Extractor.extract()
     
@@ -86,8 +90,37 @@ class DataCollector():
 
         scores = {word:score.cohesion_forward for word, score in word_score_table.items()}
 
-        global tokenizer
-        tokenizer = MaxScoreTokenizer(scores=scores)
+        DataCollector.tokenizer = MaxScoreTokenizer(scores=scores)
+
+    def makeVocab(self, path=None, save_path=None):
+        tokens = []
+        current_mode = self.mode
+
+        if path:
+            with open(path, 'r') as vocabulary:
+                vocab = json.load(vocabulary)
+                DataCollector.vocab = vocab
+                return vocab
+            
+        for mode in ['train', 'valid']:
+            self.setMode(mode)
+            for i in tqdm(range(len(self)), desc="Making Vocab..."):
+                tokens += self[i]
+
+        self.setMode(current_mode) 
+
+        counter = Counter(tokens)
+        vocab = {token: idx + 2 for idx, (token, _) in enumerate(counter.most_common())}
+        vocab['<PAD>'] = 0
+        vocab['<UNK>'] = 1
+
+        DataCollector.vocab = vocab
+
+        if save_path:
+            with open(save_path, "w") as score:
+                json.dump(vocab, score, ensure_ascii=False, indent=2)
+
+        return vocab
 
     def head(self, num=5):
         if self.mode=='train':
@@ -123,9 +156,9 @@ class DataCollector():
     def __getitem__(self, idx) -> list: # [seq_len, data]
 
         if self.mode=='train':
-            data:dict =self.train_data[idx]
+            data:dict = self.train_data[idx]
         elif self.mode=='valid':
-            data:dict =self.valid_data[idx]
+            data:dict = self.valid_data[idx]
         else:
             raise Exception("getitem error")
 
@@ -133,10 +166,31 @@ class DataCollector():
         out = data[key]
 
         cleaned_text = self._clean_text(out)
-    
-        if tokenizer is not None:
-           token = tokenizer.tokenize(cleaned_text) # [token dim]
+
+        if DataCollector.tokenizer is not None:
+           token = DataCollector.tokenizer.tokenize(cleaned_text) # [token dim]
         else:
             raise ValueError("Tokenizer is not initailized. Initialize tokenizerTrain() first.")
         
         return token
+    
+class KoreanDataset(Dataset):
+    def __init__(self, collector:DataCollector):
+        super(KoreanDataset, self).__init__()
+        self.collector = collector
+        self.vocab = DataCollector.vocab
+
+    def encoder(self, tokens, vocab):
+        return [vocab.get(token, vocab['<UNK>']) for token in tokens]
+    
+    def __len__(self):
+        return len(self.collector)
+    
+    def __getitem__(self, idx):
+        tokens = self.collector[idx] # ['나', '는', '학생', '이다']
+        encoded = self.encoder(tokens, self.vocab) # [1, 2, 4, 3]
+
+        input_seq = encoded[:-1]
+        label_seq = encoded[1:]
+
+        return torch.tensor(input_seq, dtype=torch.long), torch.tensor(label_seq, dtype=torch.long)
