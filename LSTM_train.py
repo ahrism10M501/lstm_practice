@@ -13,7 +13,7 @@ from data_collector import DataCollector, KoreanDataset
 from LSTM import LSTM
 
 ROOT = 'c:/Users/ahris/Desktop/LSTM'
-DATA_PATH = f'{ROOT}/data'
+DATA_PATH = f'{ROOT}/dadad'
 
 HYPER_PARAM_PATH = f'{ROOT}'
 HYPER_PARAM_NAME = 'hyper_param.json'
@@ -37,66 +37,68 @@ except:
     print("Can't find the hyper_param.json. Use dafault settings")
     hyper_param = {
                     'epoch':1000, 'lr':0.01,
-                    'batch':16, 'embedding_size': 128,
-                    'hidden_size':256, 'layer':3,
-                    'out_dim':64, 'bias':True,
+                    'batch':4, 'embedding_size': 4,
+                    'hidden_size':16, 'layer':1,
+                    'bias':True,
 
             'weight':{
-                    'best':0, 'last':0
+                    'best':1000000, 'last':1000000
                     }
         }
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+if torch.cuda.is_available():
+    device = 'cuda' 
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+else: 
+    device = 'cpu'
+
+print('CUDA Device? ',device)
 
 # Token화된 문장을 하나씩 뱉어줌. __getitem__ 오버라이딩
-train_data = DataCollector(DATA_PATH, 'sentence')
+train_data = DataCollector(DATA_PATH, 'sentence', 'train')
 valid_data = DataCollector(DATA_PATH, 'sentence', 'valid')
-print('\nCollector\n', train_data.__len__())
-print(valid_data.__len__())
+
+train_data.dataSearch()
+valid_data.dataSearch()
+
 # 클래스로 공유하므로 한 번만 실행하기
-train_data.tokenizerTrain(path=WORD_SCORE_SAVE_PATH)
-train_data.makeVocab(path=VOCAB_SAVE_PATH)
+train_data.tokenizerTrain(save_path=WORD_SCORE_SAVE_PATH)
+train_data.makeVocab(save_path=VOCAB_SAVE_PATH)
 
 train_dataset = KoreanDataset(train_data)
 valid_dataset = KoreanDataset(valid_data)
-
-dataset_example1:torch.Tensor = train_dataset[0][0]
-dataset_example2:torch.Tensor = train_dataset[0][1]
-print('\nDataset')
-print('train data shpae\n{}\n{}'.format(train_dataset.__len__(), dataset_example1.shape, dataset_example2.shape))
-print(valid_dataset.__len__())
 
 if DataCollector.vocab is None:
     raise ValueError("Tokenizer와 vocab을 먼저 초기화하세요.")
 vocab:dict[str, int] = DataCollector.vocab
 vocab_dim:int = len(vocab)
-print('\nvocab\n',vocab_dim)
 
 def collate_fn(batch):
     inputs = [item[0] for item in batch]
     labels = [item[1] for item in batch] 
-    print(f'\nCollate in {len(inputs)}, label {len(labels)}')
 
     inputs_padded = nn.utils.rnn.pad_sequence(inputs, batch_first=True, padding_value=0)
     labels_padded = nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=0)
 
     return inputs_padded, labels_padded
 
-print('loader')
-train_loader = DataLoader(train_dataset, batch_size=hyper_param['batch'], shuffle=True, collate_fn=collate_fn)
-valid_loader = DataLoader(valid_dataset, batch_size=hyper_param['batch'], shuffle=False, collate_fn=collate_fn)
+train_loader = DataLoader(train_dataset, batch_size=hyper_param['batch'], shuffle=True, collate_fn=collate_fn, num_workers=4)
+valid_loader = DataLoader(valid_dataset, batch_size=hyper_param['batch'], shuffle=False, collate_fn=collate_fn, num_workers=4)
 
 model = LSTM(
                 vocab_size=vocab_dim, 
                 embedding_dim=hyper_param['embedding_size'],
                 hidden_size=hyper_param['hidden_size'],
                 layer=hyper_param['layer'],
-                output=hyper_param['out_dim'],
+                output=vocab_dim,
                 bias=hyper_param['bias']
             )
+model.to(device)
 
 optimizer = optim.Adam(model.parameters(), hyper_param['lr'])
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss(ignore_index=0)
 
 #TODO: DEFINE VALID LOOP AND SAVE WEIGHT LOGIC
 
@@ -118,16 +120,15 @@ def validation():
 
 def trainLoop():
     model.train()
-    model.to(device)
     epochs = hyper_param['epoch']
     
-    for epoch in tqdm(range(epochs)):
+    for epoch in tqdm(range(epochs), desc="Model Train"):
         total_loss = 0
 
         for x, y in train_loader:
             x = x.to(device)
             y = y.to(device)
-            print(x.shape, y.shape)
+
             optimizer.zero_grad()
             pred = model(x)
             loss = criterion(pred.view(-1, pred.size(-1)), y.view(-1))
@@ -137,7 +138,7 @@ def trainLoop():
             total_loss += loss.item()
         val_loss = validation()
         
-        if hyper_param['weight']['best'] < val_loss:
+        if hyper_param['weight']['best'] > val_loss:
             hyper_param['weight']['best'] = val_loss
             torch.save(model.state_dict(), 'best_model.pt')
 
@@ -148,10 +149,4 @@ def trainLoop():
                 print("hyper_parameter is updated")
 
 if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser(description="LSTM training")
-    parser.add_argument('-p', '--path', type=str, help='Data root path')
-    parser.add_argument('-hp', type=str, help="hyper param file path")
-    
-    print(f'train_loop')
     trainLoop()

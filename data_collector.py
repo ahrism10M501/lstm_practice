@@ -27,6 +27,7 @@ class DataCollector():
 
     def __init__(self, path, key:str, mode='train'):
         self.root_path = path
+        self.path = path
 
         if mode in ['train', 'valid']:
             self.mode = mode.strip().lower()
@@ -34,10 +35,17 @@ class DataCollector():
             raise ValueError(f"invalid input {mode}: Choose either train or valid")
         
         self.key:str = key
+        self.train_data = []
+        self.valid_data = []
 
-        self.train_data = self.openUp(glob.glob(f'{path}/train/labels/**/*.json', recursive=True))
-        self.valid_data = self.openUp(glob.glob(f'{path}/valid/labels/**/*.json', recursive=True))
-
+    def dataSearch(self):
+        if self.mode == 'train':
+            self.train_data = self.openUp(glob.glob(f'{self.path}/train/labels/**/*.json', recursive=True))
+        elif self.mode == 'valid':
+            self.valid_data = self.openUp(glob.glob(f'{self.path}/valid/labels/**/*.json', recursive=True))
+        else:
+            raise ValueError("Invalid mode input")
+        
     def openUp(self, datases):
         out = []
         for datas in tqdm(datases, desc="Data Collecting "):
@@ -175,22 +183,32 @@ class DataCollector():
         return token
     
 class KoreanDataset(Dataset):
-    def __init__(self, collector:DataCollector):
+    collector:Optional[DataCollector] = None
+
+    def __init__(self, collector:DataCollector, device='cpu'):
         super(KoreanDataset, self).__init__()
-        self.collector = collector
-        self.vocab = DataCollector.vocab
+        KoreanDataset.collector = collector
+        self.vocab = collector.vocab
+        self.device = device
 
     def encoder(self, tokens, vocab):
         return [vocab.get(token, vocab['<UNK>']) for token in tokens]
     
     def __len__(self):
-        return len(self.collector)
+        return len(KoreanDataset.collector)
     
     def __getitem__(self, idx):
-        tokens = self.collector[idx] # ['나', '는', '학생', '이다']
+        tokens = KoreanDataset.collector[idx] # ['나', '는', '학생', '이다']
         encoded = self.encoder(tokens, self.vocab) # [1, 2, 4, 3]
 
         input_seq = encoded[:-1]
         label_seq = encoded[1:]
-
-        return torch.tensor(input_seq, dtype=torch.long), torch.tensor(label_seq, dtype=torch.long)
+        if self.device == 'cuda':
+            x = torch.tensor(input_seq, dtype=torch.long)
+            y = torch.tensor(label_seq, dtype=torch.long)
+            x= x.to(self.device)
+            y= y.to(self.device)
+        else:
+            x = torch.tensor(input_seq, dtype=torch.long)
+            y = torch.tensor(label_seq, dtype=torch.long)
+        return x, y

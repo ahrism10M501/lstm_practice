@@ -57,31 +57,37 @@ class LSTM(nn.Module):
         self.fc = nn.Linear(hidden_size, output)
 
     def forward(self, x):
-        # x: [batch, seq_len, input_size_dim] = (4, 10, 64)
-        # 4배치, 단어 10개짜리 문장, 64개 단어에 대해
+        # x: [batch, seq_len] -> embedding: [batch, seq_len, embedding_dim]
         x = self.encoder(x)
-        # 초기 값
-        c0 = torch.zeros(self.layer, x.size(0), self.hidden, device=x.device)
-        h0 = torch.zeros(self.layer, x.size(0), self.hidden, device=x.device)
-
-        # 각 layer의 c, h 값을 각자 관리
-        c_list = [c0[i] for i in range(self.layer)]
-        h_list = [h0[i] for i in range(self.layer)]
-
-        # seq_len 만큼 LSTM_cell 반복( t를 위해 t-10까지 갔다온다)
-
-        outs = []
-        for t in range(x.size(1)):
-            inp = x[:, t, :]
-            for i, cell in enumerate(self.cell_layer):
-                c_list[i], h_list[i] = cell(inp, c_list[i], h_list[i])
-                inp = h_list[i]
+        batch_size, seq_len = x.size(0), x.size(1)
+        
+        # 각 레이어의 초기 상태 직접 생성 - 명확하고 효율적
+        c_states = [torch.zeros(batch_size, self.hidden, device=x.device) 
+                    for _ in range(self.layer)]
+        h_states = [torch.zeros(batch_size, self.hidden, device=x.device) 
+                    for _ in range(self.layer)]
+        
+        # 각 시간 스텝별 출력 저장
+        outputs = []
+        
+        # 시퀀스의 각 시간 스텝 처리
+        for t in range(seq_len):
+            # 현재 시간 스텝의 입력: [batch, embedding_dim]
+            current_input = x[:, t, :]
             
-            # 각 단어에 적합한 단어 예측(시계열 순서대로)
-            out = self.fc(inp)
-            outs.append(out)
-
-        # [batch, seq_len, output_dim]
-        outs = torch.stack(outs, dim=1)
-
-        return outs
+            # 각 LSTM 레이어 통과
+            for layer_idx, cell in enumerate(self.cell_layer):
+                c_states[layer_idx], h_states[layer_idx] = cell(
+                    current_input, c_states[layer_idx], h_states[layer_idx]
+                )
+                # 다음 레이어의 입력은 현재 레이어의 hidden state
+                current_input = h_states[layer_idx]
+            
+            # 최종 레이어의 출력을 fully connected layer에 통과
+            output = self.fc(current_input)
+            outputs.append(output)
+        
+        # 리스트를 텐서로 변환: [batch, seq_len, output_dim]
+        outputs = torch.stack(outputs, dim=1)
+        
+        return outputs
