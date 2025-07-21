@@ -43,6 +43,7 @@ class DataCollector():
         
         self.data_path = {}
         self.total_data_length = 0
+        self.file_cache = {}
 
         for json_file_path in in_folder_data:
             try:
@@ -67,19 +68,20 @@ class DataCollector():
 
     # FIXME : 매 인덱싱마다 파일을 여닫아서 성능하락. 다만, 메모리 효율 좋음. 메모리 효율은 가져가되, 성능은 높이는 방법 필요
     def __getitem__(self, idx) -> dict:
-        if not ( 0 <= idx < self.total_data_length):
+        if not (0 <= idx < self.total_data_length):
             raise IndexError(f"인덱스 {idx}는 전체 데이터 크기 {self.total_data_length} 범위 밖 입니다.")
         
         idx_buff = idx
         for key, length in self.data_path.items():
             if idx_buff < length:
-                with open(key, 'r', encoding='utf-8') as data_file:
-                    datas = json.load(data_file)
-                    return datas[idx_buff]
+                if key not in self.file_cache:
+                    with open(key, 'r', encoding='utf-8') as data_file:
+                        self.file_cache[key] = json.load(data_file)
+                return self.file_cache[key][idx_buff]
             idx_buff -= length
 
-        raise RuntimeError("데이터를 찾는 중 오류가 발생했습니다. DataCollector.__getitem__() indexing Erroe Occured")
-        
+        raise RuntimeError("DataCollector.__getitem__() indexing Error Occurred")
+            
     def __iter__(self):
         for idx in range(len(self)):
             yield self[idx]
@@ -108,19 +110,18 @@ def makeWordScore(collector:DataCollector, corpus:Optional[str]=None, save_path:
         word_score: word_score의 위치
         return: 훈련된 MaxScoreTokenizer를 반환함.
     """
-
     if not len(collector):
         raise ValueError("Collector didn't have any datas")
     
     if not corpus:
         with open('corpus.txt', 'w', encoding='utf-8') as file:
-            for data in collector:
+            for data in tqdm(collector, desc="Making corpus.txt... "):
                 sent = claenText(data['sentence'])
                 file.write(sent + '\n\n')
     
     sents = DoublespaceLineCorpus('corpus.txt', iter_sent=True)
     Word_extractor = WordExtractor()
-    print("Tokenizer ")
+    print("WordScore ", end="")
     Word_extractor.train(sents)
     word_score_table:dict = Word_extractor.extract()
     
