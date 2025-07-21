@@ -8,7 +8,6 @@ from tqdm import tqdm
 from typing import Optional
 from collections import Counter
 
-import soynlp
 from soynlp.utils import DoublespaceLineCorpus
 from soynlp.word import WordExtractor
 from soynlp.tokenizer import MaxScoreTokenizer
@@ -21,7 +20,7 @@ class DataCollector():
     DataCollector는 수많은 json 데이터를 서치해서 하나씩 열어보내준다.
     이떄, 모든 josn을 한 번에 열지 않고 하나씩 열어서 보내줌. 이 때문에 연산이 조금 많지만, 램 사용량은 줄일 수 있음.
 
-    path: data의 ROOT. ROOT/[train, valid, tset]/[labels, sents]/*.json
+    path: data의 ROOT. ROOT/[train, valid, tset]/[labels, texts]/*.json
     phase: [train, valid, test]
     annot: [True, False:default] -> ROOT/phase/[sents(False), labels(True)]
 
@@ -36,7 +35,7 @@ class DataCollector():
             raise ValueError("{} is invalid phase".format(phase))
         
         if annot == False:
-            in_folder_data = glob.glob(f'{path}/{phase}/sents/**/*.json', recursive=True)
+            in_folder_data = glob.glob(f'{path}/{phase}/texts/**/*.json', recursive=True)
         elif annot == True:
             in_folder_data = glob.glob(f'{path}/{phase}/labels/**/*.json', recursive=True)
         else:
@@ -129,7 +128,7 @@ def makeWordScore(collector:DataCollector, corpus:Optional[str]=None, save_path:
 
     if save_path:
         with open(os.path.join(save_path, "word_score.pkl"), 'wb') as save_:
-            pickle.dump(word_score_table, save_)
+            pickle.dump(scores, save_)
             
     return scores
 
@@ -155,18 +154,41 @@ def makeVocab(collector:DataCollector, tokenizer, save_path:Optional[str]=None) 
 class KoreanDataset(Dataset):
     def __init__(self,
                  collector:DataCollector,
+                 tokenizer,
                  vocab:dict[str, int],
-                 data_len:int,
                  device='cpu'):
+        
         super(KoreanDataset, self).__init__()
-        self.device = device
-        self.data_len = data_len
 
-    def encoder(self, tokens, vocab):
-        return [vocab.get(token, vocab['<UNK>']) for token in tokens]
+        self.collector = collector
+        self.tokenizer = tokenizer
+        self.vocab = vocab
+        self.device = device
+
+    def encoder(self, tokens):
+        return [self.vocab.get(token, self.vocab['<UNK>']) for token in tokens]
     
     def __len__(self):
-        return self.data_len
+        return len(self.collector)
     
     def __getitem__(self, idx):
-        pass
+        data = self.collector[idx]
+
+        sent = claenText(data.get('sentence', ''))
+        tokens = getToken(self.tokenizer, sent)
+        encoded = self.encoder(tokens)
+
+        if len(encoded) <2:
+            print(f"경고: 인덱스 {idx}의 문장이 너무 짧아 시퀀스를 만들 수 없습니다. PAD 토큰으로 채웁니다.")
+            input_seq = [self.vocab['<PAD>']]
+            label_seq = [self.vocab['<PAD>']]
+        else:
+            input_seq = encoded[:-1]
+            label_seq = encoded[1:]
+
+        x = torch.tensor(input_seq, dtype=torch.long)
+        y = torch.tensor(label_seq, dtype=torch.long)
+        x = x.to(self.device)
+        y = y.to(self.device)
+
+        return x, y
