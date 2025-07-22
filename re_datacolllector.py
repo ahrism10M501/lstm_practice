@@ -45,42 +45,48 @@ class DataCollector():
         self.total_data_length = 0
         self.file_cache = {}
 
-        for json_file_path in in_folder_data:
-            try:
-                with open(json_file_path, 'r', encoding='utf-8') as datas:
-                    data = json.load(datas)
-                self.data_path[json_file_path] = len(data) # [file_path: len(data)] -> RAM에 올라가는 데이터양을 줄이기 위해 인덱스로 남겨두기. 실제로는 파일하나씩 열어서 할거임.
-                self.total_data_length += len(data)
-                del data
+        self.all_data = []
+        for path in in_folder_data:
+            with open(path, 'r', encoding='utf-8') as f:
+                self.all_data.extend(json.load(f))
 
-            except FileNotFoundError:
-                print(f"경고: 파일을 찾을 수 없습니다: {json_file_path}")
-            except json.JSONDecodeError:
-                print(f"경고: 파일에서 JSON을 디코드할 수 없습니다: {json_file_path}")
-            except Exception as e:
-                print(f"파일 {json_file_path} 처리 중 예기치 않은 오류 발생: {e}")
+        # for json_file_path in in_folder_data:
+        #     try:
+        #         with open(json_file_path, 'r', encoding='utf-8') as datas:
+        #             data = json.load(datas)
+        #         self.data_path[json_file_path] = len(data) # [file_path: len(data)] -> RAM에 올라가는 데이터양을 줄이기 위해 인덱스로 남겨두기. 실제로는 파일하나씩 열어서 할거임.
+        #         self.total_data_length += len(data)
+        #         del data
+                
+        #     except FileNotFoundError:
+        #         print(f"경고: 파일을 찾을 수 없습니다: {json_file_path}")
+        #     except json.JSONDecodeError:
+        #         print(f"경고: 파일에서 JSON을 디코드할 수 없습니다: {json_file_path}")
+        #     except Exception as e:
+        #         print(f"파일 {json_file_path} 처리 중 예기치 않은 오류 발생: {e}")
 
-        if self.total_data_length == 0:
-            print(f"어떤 데이터도 찾을 수 없습니다.")
+        # if self.total_data_length == 0:
+        #     print(f"어떤 데이터도 찾을 수 없습니다.")
 
     def __len__(self) -> int:
-        return self.total_data_length
+        return len(self.all_data)
 
     # FIXME : 매 인덱싱마다 파일을 여닫아서 성능하락. 다만, 메모리 효율 좋음. 메모리 효율은 가져가되, 성능은 높이는 방법 필요
     def __getitem__(self, idx) -> dict:
-        if not (0 <= idx < self.total_data_length):
-            raise IndexError(f"인덱스 {idx}는 전체 데이터 크기 {self.total_data_length} 범위 밖 입니다.")
+        # if not (0 <= idx < self.total_data_length):
+        #     raise IndexError(f"인덱스 {idx}는 전체 데이터 크기 {self.total_data_length} 범위 밖 입니다.")
         
-        idx_buff = idx
-        for key, length in self.data_path.items():
-            if idx_buff < length:
-                if key not in self.file_cache:
-                    with open(key, 'r', encoding='utf-8') as data_file:
-                        self.file_cache[key] = json.load(data_file)
-                return self.file_cache[key][idx_buff]
-            idx_buff -= length
+        # idx_buff = idx
+        # for key, length in self.data_path.items():
+        #     if idx_buff < length:
+        #         if key not in self.file_cache:
+        #             with open(key, 'r', encoding='utf-8') as data_file:
+        #                 self.file_cache[key] = json.load(data_file)
+        #         return self.file_cache[key][idx_buff]
+        #     idx_buff -= length
 
-        raise RuntimeError("DataCollector.__getitem__() indexing Error Occurred")
+        # raise RuntimeError("DataCollector.__getitem__() indexing Error Occurred")
+        return self.all_data[idx]
             
     def __iter__(self):
         for idx in range(len(self)):
@@ -175,6 +181,7 @@ class KoreanDataset(Dataset):
     def __getitem__(self, idx):
         data = self.collector[idx]
 
+        # FIXME: 매번 tokenize하는 것으로 인해 병목현상 발생
         sent = claenText(data.get('sentence', ''))
         tokens = getToken(self.tokenizer, sent)
         encoded = self.encoder(tokens)

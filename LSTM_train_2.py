@@ -10,8 +10,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torch import amp
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print('device ', device)
+print('device {}'.format(device), end="\n")
 
 import re_datacolllector
 from re_datacolllector import DataCollector, KoreanDataset
@@ -28,15 +29,15 @@ VOCAB = None
 ### HYPER PARAM ###
 if not os.path.exists(HYPER_PARAM_PATH):
     hyper_param = {
-        'epoch':1000,
-        'lr':0.01,
+        'epoch':100,
+        'lr':1e-4,
         'batch':4,
-        'num_workers':4,
-        'embedding_size': 4,
-        'hidden_size':16,
+        'num_workers':0,
+        'embedding_size':4,
+        'hidden_size':8,
         'layer':1,
         'bias':True,
-        'print_interval':10,
+        'print_interval':1,
         'weight':{
                 'best':-1.0,
                 'last':0
@@ -48,12 +49,10 @@ else:
 
 ####### DATA PREPROCESSING #######
 ### DATA LOAD ###
-print('data collector')
 train_data = DataCollector(DATA_PATH, 'train', True)
 valid_data = DataCollector(DATA_PATH, 'valid', True)
 
 ### TOKNIZER ###
-print('tokenizer')
 if os.path.exists(os.path.join(ROOT, "word_score.pkl")):
     with open(os.path.join(ROOT, "word_score.pkl"), 'rb') as f:
         score = pickle.load(f)
@@ -70,7 +69,6 @@ else:
 
 
 ### DATA LOADER ###
-print('data loader')
 train_dataset = KoreanDataset(train_data, tokenizer, vocab, device)
 valid_dataset = KoreanDataset(valid_data, tokenizer, vocab, device)
 
@@ -109,7 +107,7 @@ def evaluate(model, valid_loader, criterion, device, pad_idx=0): # pad_idx를 �
     total_tokens_evaluated = 0 # 패딩이 아닌 실제 토큰 수를 누적할 변수
 
     with torch.no_grad(): # 역전파를 위한 그래디언트 계산을 비활성화 (메모리 절약 및 속도 향상)
-        for x, y in valid_loader: # 검증 데이터로더에서 배치(x, y)를 가져옴
+        for x, y in tqdm(valid_loader, desc="evaluate... "): # 검증 데이터로더에서 배치(x, y)를 가져옴
             x = x.to(device) # 입력 텐서를 지정된 디바이스로 이동
             y = y.to(device) # 정답 텐서를 지정된 디바이스로 이동 (y는 실제 다음 토큰을 포함)
 
@@ -149,28 +147,29 @@ def evaluate(model, valid_loader, criterion, device, pad_idx=0): # pad_idx를 �
     return avg_loss, accuracy # 평균 손실과 정확도를 반환
 
 def train():
-    print('train')
     epochs = hyper_param['epoch']
+    scaler = amp.GradScaler(device)
     for epoch in tqdm(range(epochs), desc="Model Train... "):
         model.train()
         epoch_loss = 0
         
-        for x, y in tqdm(train_loader):
+        for x, y in tqdm(train_loader, desc=f"Epoch {epoch+1}: batch... "):
             x = x.to(device)
             y = y.to(device)
 
             optimizer.zero_grad()
+            with amp.autocast(device):
+                pred = model(x)
+                loss = criterion(pred.view(-1, pred.size(-1)), y.view(-1))
 
-            pred = model(x)
-            loss = criterion(pred.view(-1, pred.size(-1)), y.view(-1))
-
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             epoch_loss += loss.item()
 
         val_loss, val_acc = evaluate(model=model, valid_loader=valid_loader, criterion=criterion, device=device)
 
-        if epoch+1 % hyper_param['print_interval']:
+        if (epoch+1) % hyper_param['print_interval'] == 0:
             print(f"Epoch {epoch+1}, Loss: {epoch_loss:.4f}, Val_loss: {val_loss:.4f}, Val_acc: {val_acc:.4f}")
             hyper_param['weight']['last'] = val_acc
             with open(HYPER_PARAM_PATH, 'w', encoding='utf-8') as param_file:
@@ -185,3 +184,10 @@ def train():
         
 if __name__ == "__main__":
     train()
+
+# Epoch 1, Loss: 231928.1931, Val_loss: 8.9853, Val_acc: 0.0619
+# Epoch 2, Loss: 211142.0237, Val_loss: 8.9709, Val_acc: 0.0666
+# Epoch 3, Loss: 204052.7258, Val_loss: 9.0789, Val_acc: 0.0698
+# Epoch 4, Loss: 200195.8319, Val_loss: 9.1823, Val_acc: 0.0708
+# Epoch 5, Loss: 197818.5858, Val_loss: 9.3530, Val_acc: 0.0722
+# Epoch 6, Loss: 196256.6193, Val_loss: 9.4595, Val_acc: 0.0719
