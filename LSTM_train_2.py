@@ -31,10 +31,11 @@ if not os.path.exists(HYPER_PARAM_PATH):
     hyper_param = {
         'epoch':100,
         'lr':1e-4,
-        'batch':4,
-        'num_workers':0,
-        'embedding_size':4,
-        'hidden_size':8,
+        'batch':8,
+        'step_interval':32,
+        'num_workers':2,
+        'embedding_size':64,
+        'hidden_size':128,
         'layer':1,
         'bias':True,
         'print_interval':1,
@@ -69,8 +70,8 @@ else:
 
 
 ### DATA LOADER ###
-train_dataset = KoreanDataset(train_data, tokenizer, vocab, device)
-valid_dataset = KoreanDataset(valid_data, tokenizer, vocab, device)
+train_dataset = KoreanDataset('train_tensor.pt', train_data, tokenizer, vocab, device)
+valid_dataset = KoreanDataset('valid_tensor.pt', valid_data, tokenizer, vocab, device)
 
 def collate_fn(batch):
     inputs = [item[0] for item in batch]
@@ -81,10 +82,11 @@ def collate_fn(batch):
 
     return inputs_padded, labels_padded
 
-train_loader = DataLoader(train_dataset, batch_size=hyper_param['batch'], shuffle=True, collate_fn=collate_fn, num_workers=hyper_param['num_workers'])
-valid_loader = DataLoader(valid_dataset, batch_size=hyper_param['batch'], shuffle=False, collate_fn=collate_fn, num_workers=hyper_param['num_workers'])
+train_loader = DataLoader(train_dataset, batch_size=hyper_param['batch'], shuffle=True, collate_fn=collate_fn, num_workers=hyper_param['num_workers'], pin_memory=True)
+valid_loader = DataLoader(valid_dataset, batch_size=hyper_param['batch'], shuffle=False, collate_fn=collate_fn, num_workers=hyper_param['num_workers'], pin_memory=True)
 
 ### MODEL LOAD ###
+torch.backends.cudnn.benchmark = True
 model = LSTM(
                 vocab_size=len(vocab), 
                 embedding_dim=hyper_param['embedding_size'],
@@ -149,32 +151,50 @@ def evaluate(model, valid_loader, criterion, device, pad_idx=0): # pad_idxÎ•º Ïù
 def train():
     epochs = hyper_param['epoch']
     scaler = amp.GradScaler(device)
+    i =-1
     for epoch in tqdm(range(epochs), desc="Model Train... "):
         model.train()
+        torch.cuda.empty_cache()
+        optimizer.zero_grad()
         epoch_loss = 0
+        accum_loss = 0
         
-        for x, y in tqdm(train_loader, desc=f"Epoch {epoch+1}: batch... "):
+        for i, (x, y) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}: batch... ")):
+            torch.cuda.empty_cache()
+
             x = x.to(device)
             y = y.to(device)
-
-            optimizer.zero_grad()
+            
             with amp.autocast(device):
                 pred = model(x)
                 loss = criterion(pred.view(-1, pred.size(-1)), y.view(-1))
-
+            
             scaler.scale(loss).backward()
+            accum_loss += loss.item()
+
+            if (i+1) % hyper_param['step_interval'] == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+                epoch_loss += accum_loss / hyper_param['step_interval']
+                accum_loss = 0
+
+        if (i + 1) % hyper_param['step_interval'] != 0:
             scaler.step(optimizer)
             scaler.update()
-            epoch_loss += loss.item()
+            optimizer.zero_grad()
+            epoch_loss += accum_loss / ((i + 1) % hyper_param['step_interval'])
 
+        torch.cuda.empty_cache()
         val_loss, val_acc = evaluate(model=model, valid_loader=valid_loader, criterion=criterion, device=device)
+        torch.cuda.empty_cache()
 
         if (epoch+1) % hyper_param['print_interval'] == 0:
-            print(f"Epoch {epoch+1}, Loss: {epoch_loss:.4f}, Val_loss: {val_loss:.4f}, Val_acc: {val_acc:.4f}")
+            print(f"Epoch {epoch+1}, Loss: {epoch_loss/len(train_loader):.4f}, Val_loss: {val_loss:.4f}, Val_acc: {val_acc:.4f}")
             hyper_param['weight']['last'] = val_acc
             with open(HYPER_PARAM_PATH, 'w', encoding='utf-8') as param_file:
                 json.dump(hyper_param, param_file)
-
+        
         if hyper_param['weight']['best'] < val_acc:
             hyper_param['weight']['best'] = val_acc
             torch.save(model.state_dict(), f'{ROOT}/best_model.pt')
@@ -184,10 +204,3 @@ def train():
         
 if __name__ == "__main__":
     train()
-
-# Epoch 1, Loss: 231928.1931, Val_loss: 8.9853, Val_acc: 0.0619
-# Epoch 2, Loss: 211142.0237, Val_loss: 8.9709, Val_acc: 0.0666
-# Epoch 3, Loss: 204052.7258, Val_loss: 9.0789, Val_acc: 0.0698
-# Epoch 4, Loss: 200195.8319, Val_loss: 9.1823, Val_acc: 0.0708
-# Epoch 5, Loss: 197818.5858, Val_loss: 9.3530, Val_acc: 0.0722
-# Epoch 6, Loss: 196256.6193, Val_loss: 9.4595, Val_acc: 0.0719

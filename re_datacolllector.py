@@ -50,49 +50,17 @@ class DataCollector():
             with open(path, 'r', encoding='utf-8') as f:
                 self.all_data.extend(json.load(f))
 
-        # for json_file_path in in_folder_data:
-        #     try:
-        #         with open(json_file_path, 'r', encoding='utf-8') as datas:
-        #             data = json.load(datas)
-        #         self.data_path[json_file_path] = len(data) # [file_path: len(data)] -> RAM에 올라가는 데이터양을 줄이기 위해 인덱스로 남겨두기. 실제로는 파일하나씩 열어서 할거임.
-        #         self.total_data_length += len(data)
-        #         del data
-                
-        #     except FileNotFoundError:
-        #         print(f"경고: 파일을 찾을 수 없습니다: {json_file_path}")
-        #     except json.JSONDecodeError:
-        #         print(f"경고: 파일에서 JSON을 디코드할 수 없습니다: {json_file_path}")
-        #     except Exception as e:
-        #         print(f"파일 {json_file_path} 처리 중 예기치 않은 오류 발생: {e}")
-
-        # if self.total_data_length == 0:
-        #     print(f"어떤 데이터도 찾을 수 없습니다.")
-
     def __len__(self) -> int:
         return len(self.all_data)
-
-    # FIXME : 매 인덱싱마다 파일을 여닫아서 성능하락. 다만, 메모리 효율 좋음. 메모리 효율은 가져가되, 성능은 높이는 방법 필요
+    
     def __getitem__(self, idx) -> dict:
-        # if not (0 <= idx < self.total_data_length):
-        #     raise IndexError(f"인덱스 {idx}는 전체 데이터 크기 {self.total_data_length} 범위 밖 입니다.")
-        
-        # idx_buff = idx
-        # for key, length in self.data_path.items():
-        #     if idx_buff < length:
-        #         if key not in self.file_cache:
-        #             with open(key, 'r', encoding='utf-8') as data_file:
-        #                 self.file_cache[key] = json.load(data_file)
-        #         return self.file_cache[key][idx_buff]
-        #     idx_buff -= length
-
-        # raise RuntimeError("DataCollector.__getitem__() indexing Error Occurred")
         return self.all_data[idx]
             
     def __iter__(self):
         for idx in range(len(self)):
             yield self[idx]
 
-def claenText(sent:str):
+def cleanText(sent:str):
     """
         정규 표현식을 사용하여 텍스트를 전처리합니다.
         - URL 제거
@@ -107,7 +75,7 @@ def claenText(sent:str):
     return sent
 
 def getToken(tokenizer, sent):
-    return tokenizer.tokenize(claenText(sent))
+    return tokenizer.tokenize(cleanText(sent))
 
 def makeWordScore(collector:DataCollector, corpus:Optional[str]=None, save_path:Optional[str]=None) -> dict:
     """
@@ -122,7 +90,7 @@ def makeWordScore(collector:DataCollector, corpus:Optional[str]=None, save_path:
     if not corpus:
         with open('corpus.txt', 'w', encoding='utf-8') as file:
             for data in tqdm(collector, desc="Making corpus.txt... "):
-                sent = claenText(data['sentence'])
+                sent = cleanText(data['sentence'])
                 file.write(sent + '\n\n')
     
     sents = DoublespaceLineCorpus('corpus.txt', iter_sent=True)
@@ -160,6 +128,7 @@ def makeVocab(collector:DataCollector, tokenizer, save_path:Optional[str]=None) 
 
 class KoreanDataset(Dataset):
     def __init__(self,
+                 tensor_path:str,
                  collector:DataCollector,
                  tokenizer,
                  vocab:dict[str, int],
@@ -168,35 +137,30 @@ class KoreanDataset(Dataset):
         super(KoreanDataset, self).__init__()
 
         self.collector = collector
-        self.tokenizer = tokenizer
         self.vocab = vocab
         self.device = device
+
+        if tensor_path and os.path.exists(tensor_path):
+            self.data = torch.load(tensor_path)
+        else:
+            if collector is None or tokenizer is None or vocab is None:
+                raise ValueError("Preprocessing requires collector, tokenizer, vocab.")
+            self.data = []
+            for data in tqdm(collector, desc="Processing dataset ..."):
+                tokens = getToken(tokenizer, cleanText(data.get('sentence', '')))
+                if len(tokens) >= 2:
+                    indices = [vocab.get(token, vocab['<UNK>']) for token in tokens]
+                    self.data.append(indices)
+            torch.save(self.data, tensor_path)
 
     def encoder(self, tokens):
         return [self.vocab.get(token, self.vocab['<UNK>']) for token in tokens]
     
     def __len__(self):
-        return len(self.collector)
+        return len(self.data)
     
     def __getitem__(self, idx):
-        data = self.collector[idx]
-
-        # FIXME: 매번 tokenize하는 것으로 인해 병목현상 발생
-        sent = claenText(data.get('sentence', ''))
-        tokens = getToken(self.tokenizer, sent)
-        encoded = self.encoder(tokens)
-
-        if len(encoded) <2:
-            print(f"경고: 인덱스 {idx}의 문장이 너무 짧아 시퀀스를 만들 수 없습니다. PAD 토큰으로 채웁니다.")
-            input_seq = [self.vocab['<PAD>']]
-            label_seq = [self.vocab['<PAD>']]
-        else:
-            input_seq = encoded[:-1]
-            label_seq = encoded[1:]
-
-        x = torch.tensor(input_seq, dtype=torch.long)
-        y = torch.tensor(label_seq, dtype=torch.long)
-        x = x.to(self.device)
-        y = y.to(self.device)
-
-        return x, y
+        seq = self.data[idx]
+        input_seq = torch.tensor(seq[:-1], dtype=torch.long)
+        label_seq = torch.tensor(seq[1:], dtype=torch.long)
+        return input_seq, label_seq
